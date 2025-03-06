@@ -5,12 +5,12 @@
 	"description": "Allen & Heath iLive module for Companion",
 	"version": "1.0.0",
 	"license": "MIT",
-	"repository": "",
-	"bugs": "",
+	"repository": "git+https://github.com/crackley/companion-module-allenheath-ilive.git",
+	"bugs": "https://github.com/crackley/companion-module-allenheath-ilive/issues",
 	"maintainers": [
 		{
 			"name": "Clay Rackley",
-			"email": "crackley@ccgonline.org"
+			"email": "clay@rackley.net"
 		}
 	],
 	"runtime": {
