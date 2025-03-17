@@ -2,6 +2,13 @@ const { combineRgb } = require('@companion-module/base')
 
 module.exports = {
 	getFeedbacks(instance) {
+		const channelTypes = [
+			{ id: 'input', label: 'Input Channel', max: 64 },
+			{ id: 'fx_send', label: 'FX Send', max: 8 },
+			{ id: 'fx_return', label: 'FX Return', max: 8 },
+			{ id: 'mix', label: 'Mix', max: 32 }
+		]
+
 		return {
 			channelMute: {
 				type: 'boolean',
@@ -13,17 +20,47 @@ module.exports = {
 				},
 				options: [
 					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'channelType',
+						default: 'input',
+						choices: channelTypes.map(type => ({ id: type.id, label: type.label })),
+					},
+					{
 						type: 'number',
-						label: 'Channel',
+						label: 'Channel Number',
 						id: 'channel',
 						min: 1,
 						max: 64,
 						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find(t => t.id === options.channelType)
+							return {
+								max: type ? type.max : 64
+							}
+						},
 					},
 				],
 				callback: (feedback) => {
 					const channel = parseInt(feedback.options.channel)
-					return instance.channelStates.mute[channel] === true
+					const channelType = feedback.options.channelType
+					let muteState
+					
+					switch (channelType) {
+						case 'fx_send':
+							muteState = instance.channelStates.fxMute?.[channel]
+							break
+						case 'fx_return':
+							muteState = instance.channelStates.fxReturnMute?.[channel]
+							break
+						case 'mix':
+							muteState = instance.channelStates.mixMute?.[channel]
+							break
+						default: // input
+							muteState = instance.channelStates.mute?.[channel]
+					}
+					
+					return muteState === true
 				},
 			},
 			faderLevel: {
@@ -36,12 +73,25 @@ module.exports = {
 				},
 				options: [
 					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'channelType',
+						default: 'input',
+						choices: channelTypes.map(type => ({ id: type.id, label: type.label })),
+					},
+					{
 						type: 'number',
-						label: 'Channel',
+						label: 'Channel Number',
 						id: 'channel',
 						min: 1,
 						max: 64,
 						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find(t => t.id === options.channelType)
+							return {
+								max: type ? type.max : 64
+							}
+						},
 					},
 					{
 						type: 'number',
@@ -54,9 +104,25 @@ module.exports = {
 				],
 				callback: (feedback) => {
 					const channel = parseInt(feedback.options.channel)
+					const channelType = feedback.options.channelType
 					const threshold = parseFloat(feedback.options.threshold)
-					const level = instance.channelStates.fader[channel] || -Infinity
+					let level
 					
+					switch (channelType) {
+						case 'fx_send':
+							level = instance.channelStates.fxFader?.[channel]
+							break
+						case 'fx_return':
+							level = instance.channelStates.fxReturnFader?.[channel]
+							break
+						case 'mix':
+							level = instance.channelStates.mixFader?.[channel]
+							break
+						default: // input
+							level = instance.channelStates.fader?.[channel]
+					}
+					
+					level = level || -Infinity
 					// Convert raw level (0-1) to dB
 					const dbLevel = level === 0 ? -90 : (level * 100) - 90
 					return dbLevel >= threshold

@@ -14,6 +14,17 @@ class iLiveInstance extends InstanceBase {
 		this.processingQueue = false
 		this.channelStates = {
 			name: {},
+			fxSendName: {},
+			fxReturnName: {},
+			mixName: {},
+			mute: {},
+			fxMute: {},
+			fxReturnMute: {},
+			mixMute: {},
+			fader: {},
+			fxFader: {},
+			fxReturnFader: {},
+			mixFader: {},
 		}
 		this.receivedData = Buffer.alloc(0)
 		this.pollTimer = null
@@ -65,7 +76,7 @@ class iLiveInstance extends InstanceBase {
 				type: 'number',
 				id: 'pollInterval',
 				label: 'Poll Interval (seconds)',
-				tooltip: 'How often to poll for channel names (0 to disable)',
+				tooltip: 'How often to poll for input channel names (0 to disable)',
 				width: 4,
 				default: 1,
 				min: 0,
@@ -74,8 +85,8 @@ class iLiveInstance extends InstanceBase {
 			{
 				type: 'number',
 				id: 'maxChannel',
-				label: 'Max Channel to Poll',
-				tooltip: 'Highest channel number to poll for names',
+				label: 'Max Input Channel to Poll',
+				tooltip: 'Highest input channel number to poll for names',
 				width: 4,
 				default: 32,
 				min: 1,
@@ -103,7 +114,7 @@ class iLiveInstance extends InstanceBase {
 			this.updateStatus(InstanceStatus.Ok)
 			this.log('debug', 'Connected to iLive')
 			
-			// Initial poll for all channel names
+			// Initial poll for all input channel names
 			if (this.config.pollInterval > 0) {
 				this.pollChannelNames()
 			}
@@ -161,12 +172,44 @@ class iLiveInstance extends InstanceBase {
 
 	pollChannelNames() {
 		const maxChannel = this.config.maxChannel || 32
+		
+		// Poll input channels
 		for (let channel = 1; channel <= maxChannel; channel++) {
 			// Create the SysEx message: F0 00 00 1A 50 10 01 00 00 01 CH F7
-			// Channel numbers start at 0x20 for channel 1
+			// Input channel numbers start at 0x20 for channel 1
 			const sysex = Buffer.from([
 				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
-				0x20 + (channel - 1), // 0x20 = ch1, 0x21 = ch2, etc.
+				0x20 + (channel - 1), // 0x20 = input ch1, 0x21 = input ch2, etc.
+				0xF7
+			])
+			this.sendCommand('NAME', sysex)
+		}
+
+		// Poll FX Send channels (0x00 through 0x07)
+		for (let fxChannel = 0; fxChannel < 8; fxChannel++) {
+			const sysex = Buffer.from([
+				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
+				fxChannel, // 0x00 = FX1, 0x01 = FX2, etc.
+				0xF7
+			])
+			this.sendCommand('NAME', sysex)
+		}
+
+		// Poll FX Return channels (0x08 through 0x0F)
+		for (let fxChannel = 0; fxChannel < 8; fxChannel++) {
+			const sysex = Buffer.from([
+				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
+				0x08 + fxChannel, // 0x08 = FX Return 1, 0x09 = FX Return 2, etc.
+				0xF7
+			])
+			this.sendCommand('NAME', sysex)
+		}
+
+		// Poll Mix channels (0x60 through 0x7F)
+		for (let mixChannel = 0; mixChannel < 32; mixChannel++) {
+			const sysex = Buffer.from([
+				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
+				0x60 + mixChannel, // 0x60 = Mix 1, 0x61 = Mix 2, etc.
 				0xF7
 			])
 			this.sendCommand('NAME', sysex)
@@ -231,25 +274,54 @@ class iLiveInstance extends InstanceBase {
 			message[7] === 0x00 && message[8] === 0x00 &&
 			message[9] === 0x02) {
 			
-			const channel = message[10] - 0x20 + 1 // Convert from MIDI note (0x20+) to channel number (1+)
+			const channelByte = message[10]
+			let channelType, channel, variableId, stateKey
+
 			// Extract name (everything between channel number and F7)
 			const nameBuffer = message.slice(11, -1)
-			
-			// Clean the name string:
-			// 1. Convert to ascii and trim whitespace
-			// 2. Replace null bytes and non-printable characters
-			// 3. Ensure the string is properly terminated
 			const name = nameBuffer
-				.toString('ascii')
+				.toString('utf8')
 				.replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
 				.trim();
+
+			if (channelByte >= 0x60 && channelByte <= 0x7F) {
+				// Mix channel (0x60-0x7F)
+				channelType = 'mix'
+				channel = channelByte - 0x60 + 1 // Convert from MIDI note (0x60+) to Mix number (1+)
+				variableId = `mix_${channel}_name`
+				stateKey = 'mixName'
+			} else if (channelByte >= 0x20) {
+				// Input channel (0x20+)
+				channelType = 'input'
+				channel = channelByte - 0x20 + 1 // Convert from MIDI note (0x20+) to input channel number (1+)
+				variableId = `ch_${channel}_name`
+				stateKey = 'name'
+			} else if (channelByte >= 0x08 && channelByte <= 0x0F) {
+				// FX Return channel (0x08-0x0F)
+				channelType = 'fx_return'
+				channel = channelByte - 0x08 + 1 // Convert from MIDI note (0x08+) to FX Return number (1+)
+				variableId = `fx_return_${channel}_name`
+				stateKey = 'fxReturnName'
+			} else {
+				// FX Send channel (0x00-0x07)
+				channelType = 'fx_send'
+				channel = channelByte + 1 // Convert from 0-based to 1-based
+				variableId = `fx_send_${channel}_name`
+				stateKey = 'fxSendName'
+			}
 			
-			// Update channel name
-			this.channelStates.name[channel] = name
-			this.setVariableValues({ [`ch_${channel}_name`]: name })
+			this.channelStates[stateKey][channel] = name
+			this.setVariableValues({ [variableId]: name })
 			this.checkFeedbacks('channelName')
 			
-			this.log('debug', `Channel ${channel} name: ${name}`)
+			const channelLabel = {
+				input: 'Input Channel',
+				fx_send: 'FX Send',
+				fx_return: 'FX Return',
+				mix: 'Mix'
+			}[channelType]
+			
+			this.log('debug', `${channelLabel} ${channel} name: ${name}`)
 		}
 	}
 
