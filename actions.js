@@ -1,11 +1,11 @@
 module.exports = {
 	getActions(instance) {
 		const channelTypes = [
-			{ id: 'input', label: 'Input Channel', max: 64, offset: 0x20 },
-			{ id: 'fx_send', label: 'FX Send', max: 8, offset: 0x00 },
-			{ id: 'fx_return', label: 'FX Return', max: 8, offset: 0x08 },
-			{ id: 'mix', label: 'Mix', max: 32, offset: 0x60 },
-			{ id: 'dca', label: 'DCA', max: 16, offset: 0x10 }
+			{ id: 'input', label: 'Input Channel', max: 64, offset: 0x20, stateKey: 'fader', varPrefix: 'ch' },
+			{ id: 'fx_send', label: 'FX Send', max: 8, offset: 0x00, stateKey: 'fxFader', varPrefix: 'fx_send' },
+			{ id: 'fx_return', label: 'FX Return', max: 8, offset: 0x08, stateKey: 'fxReturnFader', varPrefix: 'fx_return' },
+			{ id: 'mix', label: 'Mix', max: 32, offset: 0x60, stateKey: 'mixFader', varPrefix: 'mix' },
+			{ id: 'dca', label: 'DCA', max: 16, offset: 0x10, stateKey: 'dcaFader', varPrefix: 'dca' }
 		]
 
 		return {
@@ -71,10 +71,165 @@ module.exports = {
 					]
 					
 					instance.sendCommand('FADER', Buffer.from(midiCommand))
+
+					// Update state and variable
+					instance.channelStates[type.stateKey][channel] = level
+					instance.setVariableValues({
+						[`${type.varPrefix}_${channel}_fader`]: level.toFixed(1)
+					})
 				},
 			},
 			muteCh: {
-				name: 'Mute Channel',
+				name: 'Channel Mute',
+				description: 'Mute or unmute a channel',
+				options: [
+					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'type',
+						default: 'input',
+						choices: channelTypes.map((type) => ({ id: type.id, label: type.label })),
+					},
+					{
+						type: 'number',
+						label: 'Channel',
+						id: 'channel',
+						min: 1,
+						max: 64,
+						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find((t) => t.id === options.type)
+							return type ? true : false
+						},
+						range: (options) => {
+							const type = channelTypes.find((t) => t.id === options.type)
+							return type ? { min: 1, max: type.max } : { min: 1, max: 64 }
+						},
+					},
+					{
+						type: 'dropdown',
+						label: 'Mute/Unmute',
+						id: 'mute',
+						default: true,
+						choices: [
+							{ id: true, label: 'Mute' },
+							{ id: false, label: 'Unmute' },
+						],
+					},
+				],
+				callback: async (action) => {
+					const type = channelTypes.find((t) => t.id === action.options.type)
+					if (!type) return
+
+					const channel = action.options.channel
+					if (channel < 1 || channel > type.max) return
+
+					const mute = action.options.mute
+					const noteNumber = type.offset + (channel - 1)
+					const velocity = mute ? 0x7F : 0x3F
+
+					const midiCommand = [0x90, noteNumber, velocity, noteNumber, 0x00]
+					instance.sendCommand('MUTE', Buffer.from(midiCommand))
+
+					// Update state and trigger feedback
+					let stateKey
+					switch (type.id) {
+						case 'input':
+							stateKey = 'mute'
+							break
+						case 'fx_send':
+							stateKey = 'fxMute'
+							break
+						case 'fx_return':
+							stateKey = 'fxReturnMute'
+							break
+						case 'mix':
+							stateKey = 'mixMute'
+							break
+						case 'dca':
+							stateKey = 'dcaMute'
+							break
+					}
+					if (stateKey) {
+						instance.channelStates[stateKey][channel] = mute
+						instance.checkFeedbacks('channelMute')
+					}
+				},
+			},
+			toggleMute: {
+				name: 'Toggle Channel Mute',
+				description: 'Toggle mute state of a channel',
+				options: [
+					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'type',
+						default: 'input',
+						choices: channelTypes.map((type) => ({ id: type.id, label: type.label })),
+					},
+					{
+						type: 'number',
+						label: 'Channel',
+						id: 'channel',
+						min: 1,
+						max: 64,
+						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find((t) => t.id === options.type)
+							return type ? true : false
+						},
+						range: (options) => {
+							const type = channelTypes.find((t) => t.id === options.type)
+							return type ? { min: 1, max: type.max } : { min: 1, max: 64 }
+						},
+					},
+				],
+				callback: async (action) => {
+					const type = channelTypes.find((t) => t.id === action.options.type)
+					if (!type) return
+
+					const channel = action.options.channel
+					if (channel < 1 || channel > type.max) return
+
+					// Get current mute state
+					let stateKey
+					switch (type.id) {
+						case 'input':
+							stateKey = 'mute'
+							break
+						case 'fx_send':
+							stateKey = 'fxMute'
+							break
+						case 'fx_return':
+							stateKey = 'fxReturnMute'
+							break
+						case 'mix':
+							stateKey = 'mixMute'
+							break
+						case 'dca':
+							stateKey = 'dcaMute'
+							break
+					}
+					if (!stateKey) return
+
+					// Toggle the state
+					const currentState = instance.channelStates[stateKey][channel] || false
+					const newState = !currentState
+
+					const noteNumber = type.offset + (channel - 1)
+					const velocity = newState ? 0x7F : 0x3F
+
+					const midiCommand = [0x90, noteNumber, velocity, noteNumber, 0x00]
+					instance.sendCommand('MUTE', Buffer.from(midiCommand))
+
+					// Update state and trigger feedback
+					instance.channelStates[stateKey][channel] = newState
+					instance.checkFeedbacks('channelMute')
+				},
+			},
+			adjustFader: {
+				name: 'Adjust Fader Level',
+				description: 'Increment or decrement a fader level by a specified amount',
 				options: [
 					{
 						type: 'dropdown',
@@ -98,40 +253,59 @@ module.exports = {
 						},
 					},
 					{
-						type: 'dropdown',
-						label: 'State',
-						id: 'state',
-						choices: [
-							{ id: '1', label: 'Mute' },
-							{ id: '0', label: 'Unmute' },
-						],
-						default: '1',
+						type: 'number',
+						label: 'Adjustment Amount (dB)',
+						id: 'adjustment',
+						min: -64,
+						max: 64,
+						default: 1,
+						required: true,
 					},
 				],
 				callback: async (action) => {
 					const channelType = action.options.channelType
 					const channel = parseInt(action.options.channel)
-					const state = action.options.state
+					const adjustment = parseFloat(action.options.adjustment)
 					
 					const type = channelTypes.find(t => t.id === channelType)
 					if (!type) return
 					
+					// Get current level
+					const currentLevel = instance.channelStates[type.stateKey][channel] || 0
+					
+					// Calculate new level
+					let newLevel = currentLevel + adjustment
+					
+					// Clamp to valid range (-54 to +10 dB)
+					newLevel = Math.max(-54, Math.min(10, newLevel))
+					
 					// Calculate the note number using the channel type's offset
 					const noteNumber = type.offset + (channel - 1)
 					
-					// Send MIDI command for mute: 90 CH 7F CH 00
-					// Send MIDI command for unmute: 90 CH 3F CH 00
-					// Note: Console accepts 40-7F for mute, 01-3F for unmute
-					// We use 7F and 3F as our standard values
+					// Convert dB to MIDI value using formula: midi = ((dB + 54) * 127) / 64
+					let midiLevel = Math.round(((newLevel + 54) * 127) / 64)
+					
+					// Clamp to valid MIDI range
+					midiLevel = Math.max(0, Math.min(127, midiLevel))
+					
+					// Send MIDI command: B0 63 CH 62 17 06 LV
 					const midiCommand = [
-						0x90,
+						0xB0,
+						0x63,
 						noteNumber,
-						state === '1' ? 0x7F : 0x3F,
-						noteNumber,
-						0x00
+						0x62,
+						0x17,
+						0x06,
+						midiLevel
 					]
 					
-					instance.sendCommand('MUTE', Buffer.from(midiCommand))
+					instance.sendCommand('FADER', Buffer.from(midiCommand))
+
+					// Update state and variable
+					instance.channelStates[type.stateKey][channel] = newLevel
+					instance.setVariableValues({
+						[`${type.varPrefix}_${channel}_fader`]: newLevel.toFixed(1)
+					})
 				},
 			},
 			recallScene: {

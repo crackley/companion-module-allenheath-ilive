@@ -15,7 +15,8 @@ This module assumes that your iLive console's MIDI channel is set to 1 (default)
 ## Supported Actions
 
 * **Set Fader Level** (-54dB to +10dB)
-* **Mute/Unmute Channels** (channels 1-64, FX Send/Return 1-8, Mix 1-32, DCA 1-16)
+* **Channel Mute** (mute or unmute a channel)
+* **Toggle Channel Mute** (toggle mute state of a channel)
 * **Recall Scenes** (scenes 1-250)
 * **Poll Channel Names** (manually request all channel names from the mixer)
 
