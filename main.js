@@ -17,17 +17,45 @@ class iLiveInstance extends InstanceBase {
 			fxSendName: {},
 			fxReturnName: {},
 			mixName: {},
+			dcaName: {},
 			mute: {},
 			fxMute: {},
 			fxReturnMute: {},
 			mixMute: {},
+			dcaMute: {},
 			fader: {},
 			fxFader: {},
 			fxReturnFader: {},
 			mixFader: {},
+			dcaFader: {},
 		}
 		this.receivedData = Buffer.alloc(0)
 		this.pollTimer = null
+		
+		// Initialize channel states
+		for (let i = 1; i <= 64; i++) {
+			this.channelStates.mute[i] = false
+			this.channelStates.name[i] = ''
+			this.channelStates.fader[i] = 0
+		}
+		for (let i = 1; i <= 8; i++) {
+			this.channelStates.fxMute[i] = false
+			this.channelStates.fxReturnMute[i] = false
+			this.channelStates.fxSendName[i] = ''
+			this.channelStates.fxReturnName[i] = ''
+			this.channelStates.fxFader[i] = 0
+			this.channelStates.fxReturnFader[i] = 0
+		}
+		for (let i = 1; i <= 32; i++) {
+			this.channelStates.mixMute[i] = false
+			this.channelStates.mixName[i] = ''
+			this.channelStates.mixFader[i] = 0
+		}
+		for (let i = 1; i <= 16; i++) {
+			this.channelStates.dcaMute[i] = false
+			this.channelStates.dcaName[i] = ''
+			this.channelStates.dcaFader[i] = 0
+		}
 	}
 
 	async init(config) {
@@ -102,47 +130,82 @@ class iLiveInstance extends InstanceBase {
 		}
 
 		if (!this.config.host) {
-			this.updateStatus(InstanceStatus.BadConfig, 'IP address not configured')
+			this.updateStatus(InstanceStatus.BadConfig, 'No target IP configured')
 			return
 		}
 
 		this.socket = new net.Socket()
-		this.connected = false
-
+		
 		this.socket.on('connect', () => {
 			this.connected = true
 			this.updateStatus(InstanceStatus.Ok)
-			this.log('debug', 'Connected to iLive')
-			
-			// Initial poll for all input channel names
-			if (this.config.pollInterval > 0) {
-				this.pollChannelNames()
-			}
+			this.initPolling()
 		})
-
+		
+		this.socket.on('error', (err) => {
+			this.connected = false
+			this.updateStatus(InstanceStatus.ConnectionFailure, err.message)
+			
+			// Clear all states when disconnected
+			for (let i = 1; i <= 64; i++) {
+				this.channelStates.mute[i] = false
+				this.channelStates.name[i] = ''
+			}
+			for (let i = 1; i <= 8; i++) {
+				this.channelStates.fxMute[i] = false
+				this.channelStates.fxReturnMute[i] = false
+				this.channelStates.fxSendName[i] = ''
+				this.channelStates.fxReturnName[i] = ''
+			}
+			for (let i = 1; i <= 32; i++) {
+				this.channelStates.mixMute[i] = false
+				this.channelStates.mixName[i] = ''
+			}
+			for (let i = 1; i <= 16; i++) {
+				this.channelStates.dcaMute[i] = false
+				this.channelStates.dcaName[i] = ''
+			}
+			this.checkFeedbacks('channelMute')
+			this.checkFeedbacks('channelName')
+		})
+		
+		this.socket.on('close', () => {
+			this.connected = false
+			this.updateStatus(InstanceStatus.Disconnected)
+			
+			// Clear all states when disconnected
+			for (let i = 1; i <= 64; i++) {
+				this.channelStates.mute[i] = false
+				this.channelStates.name[i] = ''
+			}
+			for (let i = 1; i <= 8; i++) {
+				this.channelStates.fxMute[i] = false
+				this.channelStates.fxReturnMute[i] = false
+				this.channelStates.fxSendName[i] = ''
+				this.channelStates.fxReturnName[i] = ''
+			}
+			for (let i = 1; i <= 32; i++) {
+				this.channelStates.mixMute[i] = false
+				this.channelStates.mixName[i] = ''
+			}
+			for (let i = 1; i <= 16; i++) {
+				this.channelStates.dcaMute[i] = false
+				this.channelStates.dcaName[i] = ''
+			}
+			this.checkFeedbacks('channelMute')
+			this.checkFeedbacks('channelName')
+			
+			// Try to reconnect after 5 seconds
+			setTimeout(() => {
+				if (!this.socket) return
+				this.socket.connect(51325, this.config.host)
+			}, 5000)
+		})
+		
 		this.socket.on('data', (data) => {
 			this.processData(data)
 		})
-
-		this.socket.on('error', (err) => {
-			this.log('error', 'Socket error: ' + err)
-			this.updateStatus(InstanceStatus.ConnectionFailure, err.message)
-		})
-
-		this.socket.on('close', () => {
-			if (this.connected) {
-				this.connected = false
-				this.updateStatus(InstanceStatus.Disconnected)
-				this.log('debug', 'Connection closed')
-			}
-
-			// Try to reconnect after 5 seconds
-			setTimeout(() => {
-				this.initConnection()
-			}, 5000)
-		})
-
-		// Connect to the mixer using fixed port 51325
+		
 		this.socket.connect(51325, this.config.host)
 	}
 
@@ -171,55 +234,47 @@ class iLiveInstance extends InstanceBase {
 	}
 
 	pollChannelNames() {
-		const maxChannel = this.config.maxChannel || 32
+		if (!this.connected) return
 		
-		// Poll input channels
-		for (let channel = 1; channel <= maxChannel; channel++) {
-			// Create the SysEx message: F0 00 00 1A 50 10 01 00 00 01 CH F7
-			// Input channel numbers start at 0x20 for channel 1
-			const sysex = Buffer.from([
-				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
-				0x20 + (channel - 1), // 0x20 = input ch1, 0x21 = input ch2, etc.
-				0xF7
-			])
-			this.sendCommand('NAME', sysex)
+		// Poll input channel names
+		for (let i = 1; i <= 64; i++) {
+			const noteNumber = 0x20 + (i - 1)
+			const midiCommand = [0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01, noteNumber, 0xF7]
+			this.sendCommand('NAME', Buffer.from(midiCommand))
 		}
-
-		// Poll FX Send channels (0x00 through 0x07)
-		for (let fxChannel = 0; fxChannel < 8; fxChannel++) {
-			const sysex = Buffer.from([
-				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
-				fxChannel, // 0x00 = FX1, 0x01 = FX2, etc.
-				0xF7
-			])
-			this.sendCommand('NAME', sysex)
+		
+		// Poll FX Send names
+		for (let i = 1; i <= 8; i++) {
+			const noteNumber = 0x00 + (i - 1)
+			const midiCommand = [0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01, noteNumber, 0xF7]
+			this.sendCommand('NAME', Buffer.from(midiCommand))
 		}
-
-		// Poll FX Return channels (0x08 through 0x0F)
-		for (let fxChannel = 0; fxChannel < 8; fxChannel++) {
-			const sysex = Buffer.from([
-				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
-				0x08 + fxChannel, // 0x08 = FX Return 1, 0x09 = FX Return 2, etc.
-				0xF7
-			])
-			this.sendCommand('NAME', sysex)
+		
+		// Poll FX Return names
+		for (let i = 1; i <= 8; i++) {
+			const noteNumber = 0x08 + (i - 1)
+			const midiCommand = [0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01, noteNumber, 0xF7]
+			this.sendCommand('NAME', Buffer.from(midiCommand))
 		}
-
-		// Poll Mix channels (0x60 through 0x7F)
-		for (let mixChannel = 0; mixChannel < 32; mixChannel++) {
-			const sysex = Buffer.from([
-				0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01,
-				0x60 + mixChannel, // 0x60 = Mix 1, 0x61 = Mix 2, etc.
-				0xF7
-			])
-			this.sendCommand('NAME', sysex)
+		
+		// Poll Mix names
+		for (let i = 1; i <= 32; i++) {
+			const noteNumber = 0x60 + (i - 1)
+			const midiCommand = [0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01, noteNumber, 0xF7]
+			this.sendCommand('NAME', Buffer.from(midiCommand))
+		}
+		
+		// Poll DCA names
+		for (let i = 1; i <= 16; i++) {
+			const noteNumber = 0x10 + (i - 1)
+			const midiCommand = [0xF0, 0x00, 0x00, 0x1A, 0x50, 0x10, 0x01, 0x00, 0x00, 0x01, noteNumber, 0xF7]
+			this.sendCommand('NAME', Buffer.from(midiCommand))
 		}
 	}
 
 	// Protocol Methods
 	sendCommand(cmd, params = '') {
 		if (!this.connected) {
-			this.log('debug', 'Not connected, queueing command: ' + cmd)
 			this.commandQueue.push([cmd, params])
 			return
 		}
@@ -227,7 +282,6 @@ class iLiveInstance extends InstanceBase {
 		try {
 			const buffer = Buffer.from(params)
 			this.socket.write(buffer)
-			this.log('debug', `Sent: ${buffer.toString('hex')}`)
 		} catch (e) {
 			this.log('error', 'Error sending command: ' + e.message)
 		}
@@ -239,11 +293,71 @@ class iLiveInstance extends InstanceBase {
 		
 		// Process complete messages
 		while (this.receivedData.length > 0) {
+			// Check for MIDI messages first (non-SysEx)
+			if (this.receivedData[0] === 0x90) {
+				// Wait until we have a complete MIDI message (5 bytes)
+				if (this.receivedData.length < 5) {
+					break
+				}
+				
+				// MIDI Note On message for mute/unmute
+				const channelByte = this.receivedData[1]
+				const velocity = this.receivedData[2]
+				
+				// Process mute state if it's a valid velocity value
+				// Mute: 0x40-0x7F (64-127)
+				// Unmute: 0x01-0x3F (1-63)
+				if (velocity >= 0x01) {
+					let channelType, channel, stateKey
+					
+					if (channelByte >= 0x60 && channelByte <= 0x7F) {
+						// Mix channel (0x60-0x7F)
+						channelType = 'mix'
+						channel = channelByte - 0x60 + 1
+						stateKey = 'mixMute'
+					} else if (channelByte >= 0x20 && channelByte <= 0x5F) {
+						// Input channel (0x20-0x5F)
+						channelType = 'input'
+						channel = channelByte - 0x20 + 1
+						stateKey = 'mute'
+					} else if (channelByte >= 0x10 && channelByte <= 0x1F) {
+						// DCA channel (0x10-0x1F)
+						channelType = 'dca'
+						channel = channelByte - 0x10 + 1
+						stateKey = 'dcaMute'
+					} else if (channelByte >= 0x08 && channelByte <= 0x0F) {
+						// FX Return channel (0x08-0x0F)
+						channelType = 'fx_return'
+						channel = channelByte - 0x08 + 1
+						stateKey = 'fxReturnMute'
+					} else if (channelByte >= 0x00 && channelByte <= 0x07) {
+						// FX Send channel (0x00-0x07)
+						channelType = 'fx_send'
+						channel = channelByte + 1
+						stateKey = 'fxMute'
+					}
+
+					// Velocity >= 0x40 (64) means muted
+					const isMuted = velocity >= 0x40
+					this.channelStates[stateKey][channel] = isMuted
+					
+					// Update feedback
+					this.checkFeedbacks('channelMute')
+				}
+				
+				// Remove the processed message
+				this.receivedData = this.receivedData.slice(5)
+				continue
+			}
+			
 			// Look for SysEx start (F0) and end (F7)
 			const startIndex = this.receivedData.indexOf(0xF0)
 			if (startIndex === -1) {
-				// No start byte found, clear buffer
-				this.receivedData = Buffer.alloc(0)
+				// No SysEx start found, but we might have partial MIDI data
+				// Only clear if we have non-MIDI data or more than 5 bytes
+				if (this.receivedData[0] !== 0x90 || this.receivedData.length > 5) {
+					this.receivedData = Buffer.alloc(0)
+				}
 				break
 			}
 			
@@ -263,65 +377,61 @@ class iLiveInstance extends InstanceBase {
 	}
 
 	processSysExMessage(message) {
-		this.log('debug', `Received SysEx: ${message.toString('hex')}`)
-		
 		// Check if this is a channel name response
 		// F0 00 00 1A 50 10 01 00 00 02 CH Name F7
 		if (message.length >= 12 &&
-			message[1] === 0x00 && message[2] === 0x00 && 
-			message[3] === 0x1A && message[4] === 0x50 &&
-			message[5] === 0x10 && message[6] === 0x01 &&
-			message[7] === 0x00 && message[8] === 0x00 &&
+			message[0] === 0xF0 &&
+			message[1] === 0x00 &&
+			message[2] === 0x00 &&
+			message[3] === 0x1A &&
+			message[4] === 0x50 &&
+			message[5] === 0x10 &&
+			message[6] === 0x01 &&
+			message[7] === 0x00 &&
+			message[8] === 0x00 &&
 			message[9] === 0x02) {
 			
 			const channelByte = message[10]
-			let channelType, channel, variableId, stateKey
-
-			// Extract name (everything between channel number and F7)
-			const nameBuffer = message.slice(11, -1)
-			const name = nameBuffer
-				.toString('utf8')
-				.replace(/[\x00-\x1F\x7F]/g, '') // Remove control characters
-				.trim();
-
+			const nameBytes = message.slice(11, -1) // Exclude F7
+			const name = nameBytes.toString('ascii').trim()
+			
+			let channelType, channel, stateKey, variableId
+			
 			if (channelByte >= 0x60 && channelByte <= 0x7F) {
 				// Mix channel (0x60-0x7F)
 				channelType = 'mix'
-				channel = channelByte - 0x60 + 1 // Convert from MIDI note (0x60+) to Mix number (1+)
-				variableId = `mix_${channel}_name`
+				channel = channelByte - 0x60 + 1
 				stateKey = 'mixName'
-			} else if (channelByte >= 0x20) {
-				// Input channel (0x20+)
+				variableId = `mix_${channel}_name`
+			} else if (channelByte >= 0x20 && channelByte <= 0x5F) {
+				// Input channel (0x20-0x5F)
 				channelType = 'input'
-				channel = channelByte - 0x20 + 1 // Convert from MIDI note (0x20+) to input channel number (1+)
-				variableId = `ch_${channel}_name`
+				channel = channelByte - 0x20 + 1
 				stateKey = 'name'
+				variableId = `ch_${channel}_name`
+			} else if (channelByte >= 0x10 && channelByte <= 0x1F) {
+				// DCA channel (0x10-0x1F)
+				channelType = 'dca'
+				channel = channelByte - 0x10 + 1
+				stateKey = 'dcaName'
+				variableId = `dca_${channel}_name`
 			} else if (channelByte >= 0x08 && channelByte <= 0x0F) {
 				// FX Return channel (0x08-0x0F)
 				channelType = 'fx_return'
-				channel = channelByte - 0x08 + 1 // Convert from MIDI note (0x08+) to FX Return number (1+)
-				variableId = `fx_return_${channel}_name`
+				channel = channelByte - 0x08 + 1
 				stateKey = 'fxReturnName'
-			} else {
+				variableId = `fx_return_${channel}_name`
+			} else if (channelByte >= 0x00 && channelByte <= 0x07) {
 				// FX Send channel (0x00-0x07)
 				channelType = 'fx_send'
-				channel = channelByte + 1 // Convert from 0-based to 1-based
-				variableId = `fx_send_${channel}_name`
+				channel = channelByte + 1
 				stateKey = 'fxSendName'
+				variableId = `fx_send_${channel}_name`
 			}
 			
 			this.channelStates[stateKey][channel] = name
 			this.setVariableValues({ [variableId]: name })
 			this.checkFeedbacks('channelName')
-			
-			const channelLabel = {
-				input: 'Input Channel',
-				fx_send: 'FX Send',
-				fx_return: 'FX Return',
-				mix: 'Mix'
-			}[channelType]
-			
-			this.log('debug', `${channelLabel} ${channel} name: ${name}`)
 		}
 	}
 
@@ -331,6 +441,7 @@ class iLiveInstance extends InstanceBase {
 
 	initFeedbacks() {
 		this.setFeedbackDefinitions(getFeedbacks(this))
+		this.subscribeFeedbacks('channelMute')
 	}
 
 	initVariables() {

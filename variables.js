@@ -33,6 +33,14 @@ module.exports = {
 				variableId: `mix_${i}_name`,
 			})
 		}
+
+		// Add DCA name variables
+		for (let i = 1; i <= 16; i++) {
+			variables.push({
+				name: `DCA ${i} Name`,
+				variableId: `dca_${i}_name`,
+			})
+		}
 		
 		return variables
 	},

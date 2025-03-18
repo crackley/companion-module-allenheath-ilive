@@ -1,16 +1,37 @@
 module.exports = {
 	getActions(instance) {
+		const channelTypes = [
+			{ id: 'input', label: 'Input Channel', max: 64, offset: 0x20 },
+			{ id: 'fx_send', label: 'FX Send', max: 8, offset: 0x00 },
+			{ id: 'fx_return', label: 'FX Return', max: 8, offset: 0x08 },
+			{ id: 'mix', label: 'Mix', max: 32, offset: 0x60 },
+			{ id: 'dca', label: 'DCA', max: 16, offset: 0x10 }
+		]
+
 		return {
 			faderLevel: {
 				name: 'Fader Level',
 				options: [
 					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'channelType',
+						default: 'input',
+						choices: channelTypes.map(type => ({ id: type.id, label: type.label })),
+					},
+					{
 						type: 'number',
-						label: 'Channel',
+						label: 'Channel Number',
 						id: 'channel',
 						min: 1,
 						max: 64,
 						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find(t => t.id === options.channelType)
+							return {
+								max: type ? type.max : 64
+							}
+						},
 					},
 					{
 						type: 'number',
@@ -22,11 +43,15 @@ module.exports = {
 					},
 				],
 				callback: async (action) => {
+					const channelType = action.options.channelType
 					const channel = parseInt(action.options.channel)
 					const level = parseFloat(action.options.level)
 					
-					// Calculate the note number (same as mute)
-					const noteNumber = 0x20 + (channel - 1)
+					const type = channelTypes.find(t => t.id === channelType)
+					if (!type) return
+					
+					// Calculate the note number using the channel type's offset
+					const noteNumber = type.offset + (channel - 1)
 					
 					// Convert dB to MIDI value using formula: midi = ((dB + 54) * 127) / 64
 					let midiLevel = Math.round(((level + 54) * 127) / 64)
@@ -52,12 +77,25 @@ module.exports = {
 				name: 'Mute Channel',
 				options: [
 					{
+						type: 'dropdown',
+						label: 'Channel Type',
+						id: 'channelType',
+						default: 'input',
+						choices: channelTypes.map(type => ({ id: type.id, label: type.label })),
+					},
+					{
 						type: 'number',
-						label: 'Channel',
+						label: 'Channel Number',
 						id: 'channel',
 						min: 1,
 						max: 64,
 						default: 1,
+						isVisible: (options) => {
+							const type = channelTypes.find(t => t.id === options.channelType)
+							return {
+								max: type ? type.max : 64
+							}
+						},
 					},
 					{
 						type: 'dropdown',
@@ -71,14 +109,20 @@ module.exports = {
 					},
 				],
 				callback: async (action) => {
+					const channelType = action.options.channelType
 					const channel = parseInt(action.options.channel)
 					const state = action.options.state
 					
-					// Calculate the MIDI note number (0x20 + channel - 1)
-					const noteNumber = 0x20 + (channel - 1)
+					const type = channelTypes.find(t => t.id === channelType)
+					if (!type) return
+					
+					// Calculate the note number using the channel type's offset
+					const noteNumber = type.offset + (channel - 1)
 					
 					// Send MIDI command for mute: 90 CH 7F CH 00
 					// Send MIDI command for unmute: 90 CH 3F CH 00
+					// Note: Console accepts 40-7F for mute, 01-3F for unmute
+					// We use 7F and 3F as our standard values
 					const midiCommand = [
 						0x90,
 						noteNumber,
@@ -130,6 +174,14 @@ module.exports = {
 					}
 					
 					instance.sendCommand('SCENE', Buffer.from(midiCommand))
+				},
+			},
+			pollNames: {
+				name: 'Poll Channel Names',
+				description: 'Request all channel names from the mixer. Useful when automatic polling is disabled.',
+				options: [],
+				callback: async (action) => {
+					instance.pollChannelNames()
 				},
 			},
 		}

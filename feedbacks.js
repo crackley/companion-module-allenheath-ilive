@@ -6,7 +6,8 @@ module.exports = {
 			{ id: 'input', label: 'Input Channel', max: 64 },
 			{ id: 'fx_send', label: 'FX Send', max: 8 },
 			{ id: 'fx_return', label: 'FX Return', max: 8 },
-			{ id: 'mix', label: 'Mix', max: 32 }
+			{ id: 'mix', label: 'Mix', max: 32 },
+			{ id: 'dca', label: 'DCA', max: 16 }
 		]
 
 		return {
@@ -44,20 +45,25 @@ module.exports = {
 				callback: (feedback) => {
 					const channel = parseInt(feedback.options.channel)
 					const channelType = feedback.options.channelType
-					let muteState
 					
+					if (!channel || channel < 1) return false
+					
+					let muteState = false
 					switch (channelType) {
 						case 'fx_send':
-							muteState = instance.channelStates.fxMute?.[channel]
+							muteState = instance.channelStates.fxMute[channel] ?? false
 							break
 						case 'fx_return':
-							muteState = instance.channelStates.fxReturnMute?.[channel]
+							muteState = instance.channelStates.fxReturnMute[channel] ?? false
 							break
 						case 'mix':
-							muteState = instance.channelStates.mixMute?.[channel]
+							muteState = instance.channelStates.mixMute[channel] ?? false
+							break
+						case 'dca':
+							muteState = instance.channelStates.dcaMute[channel] ?? false
 							break
 						default: // input
-							muteState = instance.channelStates.mute?.[channel]
+							muteState = instance.channelStates.mute[channel] ?? false
 					}
 					
 					return muteState === true
@@ -117,6 +123,9 @@ module.exports = {
 							break
 						case 'mix':
 							level = instance.channelStates.mixFader?.[channel]
+							break
+						case 'dca':
+							level = instance.channelStates.dcaFader?.[channel]
 							break
 						default: // input
 							level = instance.channelStates.fader?.[channel]
